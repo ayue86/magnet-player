@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_go_torrent_streamer/flutter_go_torrent_streamer.dart';
 import 'package:path_provider/path_provider.dart';
@@ -14,7 +13,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '磁力解析播放器（研究）',
+      title: '磁力解析播放器',
       theme: ThemeData(primarySwatch: Colors.blue),
       home: const MagnetHomePage(),
     );
@@ -51,6 +50,11 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
   }
 
   Future<void> _parseMagnet(String magnet) async {
+    if (magnet.isEmpty) {
+      setState(() => _error = "请输入磁力链接");
+      return;
+    }
+
     setState(() {
       _isLoading = true;
       _error = null;
@@ -60,13 +64,11 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
 
     try {
       final dir = await getApplicationDocumentsDirectory();
-      // 初始化并解析磁力链接
       await _torrent.initTorrent(
         magnetUri: magnet,
         savePath: dir.path,
       );
 
-      // 监听解析结果
       _torrent.torrentStatusStream.listen((status) {
         if (mounted) {
           setState(() {
@@ -95,23 +97,15 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
   }
 
   String _getFileType(String fileName) {
-    if (fileName.endsWith('.mp4') ||
-        fileName.endsWith('.mkv') ||
-        fileName.endsWith('.avi') ||
-        fileName.endsWith('.mov')) {
-      return "视频";
-    } else if (fileName.endsWith('.jpg') ||
-        fileName.endsWith('.png') ||
-        fileName.endsWith('.gif')) {
-      return "图片";
-    } else if (fileName.endsWith('.pdf') ||
-        fileName.endsWith('.doc') ||
-        fileName.endsWith('.docx') ||
-        fileName.endsWith('.txt')) {
-      return "文档";
-    } else {
-      return "其他";
-    }
+    final videoExts = ['.mp4', '.mkv', '.avi', '.mov', '.flv'];
+    final imageExts = ['.jpg', '.png', '.gif', '.jpeg'];
+    final docExts = ['.pdf', '.doc', '.docx', '.txt', '.xls'];
+
+    final ext = fileName.substring(fileName.lastIndexOf('.'));
+    if (videoExts.contains(ext)) return "视频";
+    if (imageExts.contains(ext)) return "图片";
+    if (docExts.contains(ext)) return "文档";
+    return "其他";
   }
 
   @override
@@ -134,6 +128,7 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
               decoration: const InputDecoration(
                 labelText: "输入磁力链接",
                 border: OutlineInputBorder(),
+                hintText: "例：magnet:?xt=urn:btih:xxx",
               ),
             ),
             const SizedBox(height: 10),
@@ -144,40 +139,50 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 10),
-                child: Text(_error!, style: const TextStyle(color: Colors.red)),
+                child: Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
               ),
             if (_isLoading)
               const Padding(
-                padding: const EdgeInsets.only(top: 10),
+                padding: EdgeInsets.only(top: 10),
                 child: CircularProgressIndicator(),
               ),
-            const SizedBox(height: 10),
-            // 播放按钮（解析出流地址后显示）
             if (_playUrl != null)
-              ElevatedButton(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => VideoPlayPage(url: _playUrl!),
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: ElevatedButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => VideoPlayPage(url: _playUrl!)),
                   ),
+                  child: const Text("播放视频流"),
                 ),
-                child: const Text("播放视频流"),
               ),
             const SizedBox(height: 10),
-            // 文件列表
             Expanded(
-              child: ListView.builder(
-                itemCount: _files.length,
-                itemBuilder: (_, i) {
-                  final f = _files[i];
-                  return ListTile(
-                    title: Text(f.name),
-                    subtitle: Text(
-                      "类型: ${_getFileType(f.name)} | 大小: ${_formatSize(f.size)}",
+              child: _files.isEmpty
+                  ? const Center(child: Text("解析后将显示文件列表"))
+                  : ListView.builder(
+                      itemCount: _files.length,
+                      itemBuilder: (_, i) {
+                        final f = _files[i];
+                        return ListTile(
+                          title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          subtitle: Text(
+                            "类型：${_getFileType(f.name)} | 大小：${_formatSize(f.size)}",
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          leading: Icon(
+                            _getFileType(f.name) == "视频"
+                                ? Icons.video_library
+                                : _getFileType(f.name) == "图片"
+                                    ? Icons.image
+                                    : _getFileType(f.name) == "文档"
+                                        ? Icons.description
+                                        : Icons.file_copy,
+                          ),
+                        );
+                      },
                     ),
-                  );
-                },
-              ),
             ),
           ],
         ),
@@ -186,10 +191,8 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
   }
 }
 
-// 视频播放页面
 class VideoPlayPage extends StatefulWidget {
   final String url;
-
   const VideoPlayPage({super.key, required this.url});
 
   @override
@@ -243,7 +246,7 @@ class _VideoPlayPageState extends State<VideoPlayPage> {
                     child: VideoPlayer(_controller),
                   ),
                   if (_isBuffering)
-                    const Center(child: CircularProgressIndicator()),
+                    const Center(child: CircularProgressIndicator(color: Colors.white)),
                 ],
               )
             : const CircularProgressIndicator(),
@@ -251,14 +254,10 @@ class _VideoPlayPageState extends State<VideoPlayPage> {
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           setState(() {
-            _controller.value.isPlaying
-                ? _controller.pause()
-                : _controller.play();
+            _controller.value.isPlaying ? _controller.pause() : _controller.play();
           });
         },
-        child: Icon(
-          _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-        ),
+        child: Icon(_controller.value.isPlaying ? Icons.pause : Icons.play_arrow),
       ),
     );
   }
