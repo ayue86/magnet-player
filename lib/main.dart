@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter_libtorrent/flutter_libtorrent.dart';
+import 'package:flutter_go_torrent_streamer/flutter_go_torrent_streamer.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:video_player/video_player.dart';
@@ -14,7 +14,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Magnet Player (Research)',
+      title: '磁力解析播放器（研究）',
       theme: ThemeData(primarySwatch: Colors.blue),
       home: const MagnetHomePage(),
     );
@@ -30,61 +30,58 @@ class MagnetHomePage extends StatefulWidget {
 
 class _MagnetHomePageState extends State<MagnetHomePage> {
   final TextEditingController _magnetCtrl = TextEditingController();
-  final FlutterLibtorrent _lt = FlutterLibtorrent();
-  Torrent? _torrent;
-  List<TorrentFile> _files = [];
+  final FlutterGoTorrentStreamer _torrent = FlutterGoTorrentStreamer();
+  List<TorrentFileInfo> _files = [];
   bool _isLoading = false;
   String? _error;
+  String? _playUrl;
 
   @override
   void initState() {
     super.initState();
-    _initLibtorrent();
+    _requestPermissions();
   }
 
-  Future<void> _initLibtorrent() async {
-    final dir = await getApplicationDocumentsDirectory();
-    await _lt.init(
-      tempPath: dir.path,
-      downloadPath: dir.path,
-    );
+  Future<void> _requestPermissions() async {
+    await [
+      Permission.storage,
+      Permission.internet,
+      Permission.wakeLock,
+    ].request();
   }
 
-  Future<void> _parseAndLoad(String magnet) async {
+  Future<void> _parseMagnet(String magnet) async {
     setState(() {
       _isLoading = true;
       _error = null;
       _files.clear();
-      _torrent?.dispose();
-      _torrent = null;
+      _playUrl = null;
     });
 
-    final status = await Permission.storage.request();
-    if (!status.isGranted) {
-      setState(() {
-        _error = "需要存储权限才能继续";
-        _isLoading = false;
-      });
-      return;
-    }
-
     try {
-      final torrent = await _lt.addTorrent(magnet);
-      setState(() => _torrent = torrent);
+      final dir = await getApplicationDocumentsDirectory();
+      // 初始化并解析磁力链接
+      await _torrent.initTorrent(
+        magnetUri: magnet,
+        savePath: dir.path,
+      );
 
-      // 等待元数据加载（关键：metadataReceived）
-      await for (final update in torrent.listen()) {
-        if (update is MetadataReceivedUpdate) {
-          final files = torrent.getFiles();
-          setState(() => _files = files);
-          break;
-        } else if (update is ErrorUpdate) {
-          setState(() => _error = "Torrent error: ${update.error}");
-          break;
+      // 监听解析结果
+      _torrent.torrentStatusStream.listen((status) {
+        if (mounted) {
+          setState(() {
+            if (status is TorrentMetadataLoaded) {
+              _files = status.files;
+            } else if (status is TorrentError) {
+              _error = status.message;
+            } else if (status is TorrentStreamReady) {
+              _playUrl = status.streamUrl;
+            }
+          });
         }
-      }
+      });
     } catch (e) {
-      setState(() => _error = "Failed: $e");
+      setState(() => _error = "解析失败: $e");
     } finally {
       setState(() => _isLoading = false);
     }
@@ -97,10 +94,30 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
     return "${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB";
   }
 
+  String _getFileType(String fileName) {
+    if (fileName.endsWith('.mp4') ||
+        fileName.endsWith('.mkv') ||
+        fileName.endsWith('.avi') ||
+        fileName.endsWith('.mov')) {
+      return "视频";
+    } else if (fileName.endsWith('.jpg') ||
+        fileName.endsWith('.png') ||
+        fileName.endsWith('.gif')) {
+      return "图片";
+    } else if (fileName.endsWith('.pdf') ||
+        fileName.endsWith('.doc') ||
+        fileName.endsWith('.docx') ||
+        fileName.endsWith('.txt')) {
+      return "文档";
+    } else {
+      return "其他";
+    }
+  }
+
   @override
   void dispose() {
     _magnetCtrl.dispose();
-    _torrent?.dispose();
+    _torrent.dispose();
     super.dispose();
   }
 
@@ -121,8 +138,8 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
             ),
             const SizedBox(height: 10),
             ElevatedButton(
-              onPressed: _isLoading ? null : () => _parseAndLoad(_magnetCtrl.text),
-              child: const Text("解析并加载"),
+              onPressed: _isLoading ? null : () => _parseMagnet(_magnetCtrl.text),
+              child: const Text("解析磁力链接"),
             ),
             if (_error != null)
               Padding(
@@ -131,10 +148,23 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
               ),
             if (_isLoading)
               const Padding(
-                padding: EdgeInsets.only(top: 10),
+                padding: const EdgeInsets.only(top: 10),
                 child: CircularProgressIndicator(),
               ),
             const SizedBox(height: 10),
+            // 播放按钮（解析出流地址后显示）
+            if (_playUrl != null)
+              ElevatedButton(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => VideoPlayPage(url: _playUrl!),
+                  ),
+                ),
+                child: const Text("播放视频流"),
+              ),
+            const SizedBox(height: 10),
+            // 文件列表
             Expanded(
               child: ListView.builder(
                 itemCount: _files.length,
@@ -142,12 +172,8 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
                   final f = _files[i];
                   return ListTile(
                     title: Text(f.name),
-                    subtitle: Text("大小: ${_formatSize(f.size)} | 索引: ${f.index}"),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => VideoPlayPage(torrent: _torrent!, fileIndex: f.index),
-                      ),
+                    subtitle: Text(
+                      "类型: ${_getFileType(f.name)} | 大小: ${_formatSize(f.size)}",
                     ),
                   );
                 },
@@ -156,85 +182,65 @@ class _MagnetHomePageState extends State<MagnetHomePage> {
           ],
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
+// 视频播放页面
 class VideoPlayPage extends StatefulWidget {
-  final Torrent torrent;
-  final int fileIndex;
+  final String url;
 
-  const VideoPlayPage({super.key, required this.torrent, required this.fileIndex});
+  const VideoPlayPage({super.key, required this.url});
 
   @override
   State<VideoPlayPage> createState() => _VideoPlayPageState();
 }
 
 class _VideoPlayPageState extends State<VideoPlayPage> {
-  VideoPlayerController? _videoCtrl;
+  late VideoPlayerController _controller;
+  bool _isInit = false;
   bool _isBuffering = false;
 
   @override
   void initState() {
     super.initState();
-    _initPlay();
+    _initVideo();
   }
 
-  Future<void> _initPlay() async {
-    setState(() => _isBuffering = true);
-    try {
-      // 先确保只下载目标文件（选择性下载）
-      await widget.torrent.setFilePriority(widget.fileIndex, 7); // 高优先级
-      for (int i = 0; i < widget.torrent.getFiles().length; i++) {
-        if (i != widget.fileIndex) {
-          await widget.torrent.setFilePriority(i, 0); // 不下载其他文件
-        }
-      }
-
-      // 这里是关键：你需要拿到“可播放的文件路径/URI”
-      // flutter_libtorrent 的用法可能因版本不同而略有差异
-      // 如果下面这行不能直接用，你可能需要改用：
-      // - 先 download 到本地，再用 file:// 播放
-      // - 或用 libtorrent 的 create_torrent_handle + 做一个本地 HTTP 服务供 video_player 播放
-      final path = await widget.torrent.getFilePath(widget.fileIndex);
-      final file = File(path);
-
-      _videoCtrl = VideoPlayerController.file(file)
-        ..addListener(() {
+  Future<void> _initVideo() async {
+    _controller = VideoPlayerController.network(widget.url)
+      ..addListener(() {
+        if (mounted) {
           setState(() {
-            _isBuffering = _videoCtrl!.value.isBuffering;
+            _isBuffering = _controller.value.isBuffering;
           });
-        })
-        ..initialize().then((_) {
-          setState(() {});
-          _videoCtrl!.play();
-        });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("播放失败: $e")));
-      }
-    } finally {
-      if (mounted) setState(() => _isBuffering = false);
-    }
+        }
+      })
+      ..initialize().then((_) {
+        if (mounted) {
+          setState(() => _isInit = true);
+          _controller.play();
+        }
+      });
   }
 
   @override
   void dispose() {
-    _videoCtrl?.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("播放")),
+      appBar: AppBar(title: const Text("视频播放")),
       body: Center(
-        child: _videoCtrl?.value.isInitialized ?? false
+        child: _isInit
             ? Stack(
                 children: [
                   AspectRatio(
-                    aspectRatio: _videoCtrl!.value.aspectRatio,
-                    child: VideoPlayer(_videoCtrl!),
+                    aspectRatio: _controller.value.aspectRatio,
+                    child: VideoPlayer(_controller),
                   ),
                   if (_isBuffering)
                     const Center(child: CircularProgressIndicator()),
@@ -242,18 +248,18 @@ class _VideoPlayPageState extends State<VideoPlayPage> {
               )
             : const CircularProgressIndicator(),
       ),
-      floatingActionButton: _videoCtrl != null
-          ? FloatingActionButton(
-              onPressed: () {
-                setState(() {
-                  _videoCtrl!.value.isPlaying ? _videoCtrl!.pause() : _videoCtrl!.play();
-                });
-              },
-              child: Icon(
-                _videoCtrl!.value.isPlaying ? Icons.pause : Icons.play_arrow,
-              ),
-            )
-          : null,
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          setState(() {
+            _controller.value.isPlaying
+                ? _controller.pause()
+                : _controller.play();
+          });
+        },
+        child: Icon(
+          _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+        ),
+      ),
     );
   }
 }
