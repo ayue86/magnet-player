@@ -10,7 +10,6 @@
     <application
         android:label="magnet_player"
         android:icon="@mipmap/ic_launcher">
-        <!-- v2嵌入核心配置，无需指定android:name -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
