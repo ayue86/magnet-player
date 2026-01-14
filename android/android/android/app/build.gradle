@@ -27,8 +27,8 @@ apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
 
 android {
     namespace "com.example.magnet_player"
-    compileSdkVersion 34  // 明确指定高版本，避免兼容问题
-    ndkVersion "25.2.9519653"  // 固定NDK版本
+    compileSdkVersion 34
+    ndkVersion "25.2.9519653"
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
@@ -37,7 +37,6 @@ android {
 
     kotlinOptions {
         jvmTarget = '1.8'
-        kotlinVersion = '1.9.0'  // 明确Kotlin版本
     }
 
     sourceSets {
